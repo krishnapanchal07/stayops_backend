@@ -30,7 +30,7 @@ def page(db, user, query, city, status, type, owner, offset, limit, sort, direct
     column = {'name':Property.name,'city':Property.city,'type':Property.type,'status':Property.status,'createdAt':Property.created_at}[sort]
     rows = db.scalars(stmt.order_by(column.asc() if direction == 'asc' else column.desc(),Property.id).offset(offset).limit(limit)).all()
     counts = service.occupancy_counts(db) if not public else {}
-    return {'items':[service.output(p,counts,public,False) for p in rows],'total':total,'offset':offset,'limit':limit}
+    return {'items':[service.output(p,counts,public,False,user=user) for p in rows],'total':total,'offset':offset,'limit':limit}
 
 
 @router.get('/properties')
@@ -43,7 +43,7 @@ def listing(db: Session=Depends(get_db), user=Depends(get_active_user), query: s
 def summary(db: Session=Depends(get_db),user=Depends(get_active_user)):
     rows = db.scalars(service.scoped(select(Property),user)).all()
     counts = service.occupancy_counts(db)
-    values = [service.output(p,counts,detail=False) for p in rows]
+    values = [service.output(p,counts,detail=False,user=user) for p in rows]
     beds = sum(p['totalBeds'] for p in values)
     return {'totalProperties':len(rows),'activeProperties':sum(p.status=='ACTIVE' for p in rows),
         'totalRooms':sum(p['totalRooms'] for p in values),'occupancyPercent':round(sum(p['occupiedBeds'] for p in values)/beds*100) if beds else 0,
@@ -60,17 +60,17 @@ def owners(db: Session=Depends(get_db),user=Depends(require_permission('PROPERTY
 
 @router.post('/properties',status_code=201,dependencies=[Depends(require_trusted_origin)])
 def create(payload: PropertyWrite,db: Session=Depends(get_db),user=Depends(require_permission('PROPERTY_CREATE'))):
-    return service.output(service.write(db,payload,user))
+    return service.output(service.write(db,payload,user),user=user)
 
 
 @router.get('/properties/{property_id}')
 def detail(property_id: str,db: Session=Depends(get_db),user=Depends(get_active_user)):
-    return service.output(service.get(db,property_id,user),service.occupancy_counts(db))
+    return service.output(service.get(db,property_id,user),service.occupancy_counts(db),user=user)
 
 
 @router.patch('/properties/{property_id}',dependencies=[Depends(require_trusted_origin)])
 def edit(property_id: str,payload: PropertyWrite,db: Session=Depends(get_db),user=Depends(require_permission('PROPERTY_EDIT'))):
-    return service.output(service.write(db,payload,user,service.get(db,property_id,user,True)),service.occupancy_counts(db))
+    return service.output(service.write(db,payload,user,service.get(db,property_id,user,True)),service.occupancy_counts(db),user=user)
 
 
 @router.patch('/properties/{property_id}/status',dependencies=[Depends(require_trusted_origin)])
@@ -79,7 +79,7 @@ def status(property_id: str,payload: StatusInput,db: Session=Depends(get_db),use
     item.status = payload.status
     item.archived_at = None
     db.commit()
-    return service.output(item,service.occupancy_counts(db))
+    return service.output(item,service.occupancy_counts(db),user=user)
 
 
 @router.post('/properties/{property_id}/archive',dependencies=[Depends(require_trusted_origin)])
@@ -88,7 +88,7 @@ def archive(property_id: str,db: Session=Depends(get_db),user=Depends(require_pe
     item = service.get(db,property_id,user,True)
     item.status, item.archived_at = 'ARCHIVED', now()
     db.commit()
-    return service.output(item)
+    return service.output(item,user=user)
 
 
 @router.get('/public/properties')

@@ -433,9 +433,8 @@ activation remains a separate existing auth responsibility.
 - Frontend tenant pages: admin/tenants/{TenantListPage,TenantDetailsPage}.tsx,
   tenant/{TenantProfilePage,MyRoomPage,TenantDashboardPage}.tsx; tenant components
   TenantForm.tsx, TenantStatusModal.tsx, TenantCheckoutModal.tsx.
-- Frontend contract: types/inquiry.ts; new scripts/workflowHarness.cjs and
-  scripts/workflows.test.cjs; updated scripts/discovery.test.cjs and package.json
-  with `test:workflows`. No dependency was added.
+- Frontend contract: types/inquiry.ts. The former temporary frontend workflow
+  scripts were subsequently removed; current checks are build/lint and browser QA.
 - This README and Fronted/README.md document usage and limitations.
 
 ### Performance and remaining boundaries
@@ -663,9 +662,8 @@ remain available for compatibility.
   `src/pages/admin/staff/{StaffListPage,StaffDetailsPage}.tsx` and the explicit
   invitation handler in `src/pages/common/StaffProfilePage.tsx`.
 - Frontend `src/components/tables/DataTable.tsx`: optional server paging/sorting.
-- New `scripts/staff.test.cjs`; updated `scripts/workflowHarness.cjs`,
-  `scripts/workflows.test.cjs` to replace its old mock-staff expectation, and
-  `package.json` with `test:staff`. No dependency was added.
+- The former temporary frontend staff/workflow harness was subsequently removed.
+  Current checks are backend pytest, frontend build/lint and browser QA.
 - Backend/README.md and Fronted/README.md document usage, boundaries and results.
   Mock staff/property/room files remain available; no seed import runs.
 
@@ -834,3 +832,223 @@ This section supersedes the Phase 3 inventory/discovery limitations above.
 18. **Cleanup:** removed temporary QA scripts, test file, oversized/invalid upload fixtures and account metadata. Removed exactly three QA users, two QA tenants and one QA inquiry with their dependent events/sessions. Restored Cedar's temporary QA ownership to its original null value. No user/customer records were targeted.
 19. **Reusable demos:** preserved the existing 3 demo properties, 12 property photos/36 variants and five licensed source photos. Added 3 buildings, 3 floors, 3 DEMO-101 rooms, 6 beds and 6 room photos/18 variants. `python -m app.modules.inventory.demo` uses an existing development SuperAdmin login, is disabled outside development, and was run twice to verify stable IDs. Final database: 12 properties, 10 buildings, 13 floors, 14 rooms, 29 beds, 6 room images, 12 property images and zero active occupancies. Fictional demos have no fabricated map coordinates or occupants.
 20. **Limits/unverified:** not all 75 requested browser scenarios were run individually. Browser offline/500 injection, every staff role, archive/capacity/image deletion through UI, large-data paging and long-duration token expiry were not fully exercised; backend tests cover several of those business rules. Map marker navigation with a newly created Phase 4 geocoded property was not checked (demos deliberately have no coordinates). Distance sorting applies to the current map/result page; map pins also show the current page. Gender policy is not persisted, so choosing a gender currently returns no matches rather than inventing eligibility. Image operations and room edits are separate transactions; partial image failure leaves the saved room and a retry message. Real SMTP and production-scale/concurrency load testing remain unverified. No claim of zero bugs or exhaustive testing is made.
+
+
+## Phase 5 — Finance delivery and verification (26 November 2026)
+
+This section supersedes earlier transitional statements about finance and tenant
+payments. Finance uses the canonical PostgreSQL tenants/properties and existing
+permissions; no financial fixtures are imported into the database.
+
+1. **Backend modules.** Added `app/modules/finance/{models,schemas,service,summary,
+   ledger,reports,router}.py` and registered the router/model metadata. Existing
+   property serializers now query monthly receipt revenue, and body size limits
+   include finance. No new Python or frontend dependencies were introduced.
+2. **Frontend integration.** Replaced all four finance services with typed Axios
+   requests through the existing client. Added `services/finance/api.ts`,
+   `hooks/useFinanceTable.ts` and `components/finance/FinanceFilters.tsx`. Updated
+   all invoice/payment/expense/outstanding pages, finance forms, tenant payment and
+   dashboard pages, admin tenant summary, dashboard/report/tenant services, finance
+   types/calculation/validation/receipt helpers and currency formatting. Shared
+   Modal scrolling and async response identity were corrected during browser QA.
+3. **Migration.** `0006_finance` follows the verified `0005_inventory` head. It adds
+   `finance_invoices`, `finance_invoice_items`, `finance_payments` and
+   `finance_expenses` only. Both the real application database and disposable test
+   schemas were upgraded. No table reset, `create_all`, mock import or user-record
+   conversion is performed.
+4. **Endpoints.** All paths below are under `/api/v1/finance`:
+
+   | Method | Path | Purpose |
+   | --- | --- | --- |
+   | GET, POST | `/invoices` | Scoped server pages / invoice creation |
+   | GET | `/invoices/summary` | SQL billed/received/outstanding/overdue totals |
+   | GET, PATCH | `/invoices/{id}` | Detail / eligible edit |
+   | POST | `/invoices/{id}/cancel` | Retained cancellation without payment history |
+   | GET, POST | `/payments` | Scoped server pages / staff receipt recording |
+   | GET | `/payments/summary` | SQL collections/pending/overdue/today |
+   | GET | `/payments/{id}`, `/payments/{id}/receipt` | Authorized persisted payment/receipt |
+   | POST | `/payments/{id}/refund` | Record a completed external refund with reason/actor/time |
+   | GET, POST | `/expenses` | Scoped server pages / creation |
+   | GET | `/expenses/summary` | SQL paid total/month/year/category totals |
+   | GET, PATCH | `/expenses/{id}` | Detail / editing |
+   | POST | `/expenses/{id}/cancel` | Retain cancelled expense |
+   | GET | `/overview` | SQL dashboard totals and bounded chart/recent/due rows |
+   | GET | `/ledger` | Server-paginated invoice/payment ledger |
+   | GET | `/tenants/me/summary`, `/tenants/{id}/summary` | Linked tenant/scoped staff balances |
+   | GET | `/options/properties`, `/options/tenants` | Authorized canonical entity choices |
+   | GET | `/reports/{REVENUE,PAYMENTS,OUTSTANDING,EXPENSES}` | Existing SQL financial reports/export data |
+
+   Lists return `{items,total,offset,limit}`; default 20, maximum 100. Filters include
+   bounded query, property/tenant/invoice, status, period, due status, method/category,
+   dates and allowlisted sorting expressions. Ledger additionally supports its
+   existing all/due/overdue/completed tabs. Dashboard filters use property/from/to.
+   Static summary routes precede UUID routes. Creation requires `Idempotency-Key`;
+   writes require the existing trusted Origin and CSRF header.
+5. **Relationships/integrity.** Invoices reference canonical tenant/property IDs.
+   Relational line items carry numeric amounts. Payments reference invoices and
+   canonical tenant/property IDs; a composite invoice FK prevents inconsistent
+   payment relationships even at the database layer. Users are referenced for
+   creation and refund audit. Unique UUID-based document numbers and submission keys,
+   positive numeric amounts, date/total checks and enum constraints are enforced.
+   No cascade silently deletes payment history. Foreign keys preserve historical
+   tenant/property relationships after checkout.
+6. **Inventory/rent.** Allocation's saved `Tenant.data.roomRent` supplies the UI rent
+   preview, rather than today's mutable room price. Item amounts remain explicitly
+   editable as in the existing form, and the server validates all submitted charges.
+   Invoices and receipts save identity/location snapshots and their own amounts;
+   room rent changes, tenant renaming, property renaming and checkout do not rewrite
+   old documents. There is no second occupancy ledger or tenant/property catalog.
+7. **Data preservation/backup.** Before upgrading, `pg_dump -Fc` created the ignored
+   local backup `Backend/backups/before-finance-20261126-010059.dump` (86,429 bytes),
+   alongside the pre-migration table-count manifest. All 24 existing table counts
+   were unchanged by the additive migration. Existing auth, inquiries, tenants,
+   staff, inventory, occupancy and image data were not deleted or reseeded. QA
+   mutations used a separate disposable PostgreSQL cluster, never the application
+   database. Reusable Phase 3/4 demos and image files were untouched.
+8. **Dropdowns.** Finance options derive scope from existing Owner relationships or
+   staff assignments. Accountants do not require unrelated management permissions.
+   Property changes clear tenant/invoice/amount, tenant changes clear invoice/amount,
+   and async result keys reject obsolete responses. Browser tests verified scoped
+   choices, no eligible invoices, current edit selections and selection reset.
+   Static business enums remain application constants.
+9. **Calculation/payment rules.** Authoritative calculations use Python Decimal
+   and PostgreSQL NUMERIC(12,2), with at most two input decimal places. Invoice
+   subtotal minus discount plus late fee must be positive. Paid amount is a SQL sum
+   of successful persisted payments; cancellation, paid, overdue, partial and issued
+   statuses are derived from those records and the due date. Zero/negative/excessive,
+   future-dated, wrong-tenant and cancelled-invoice payments are rejected. Electronic
+   methods require a transaction reference. An invoice row lock serializes payments,
+   edits, cancellation and refund corrections; advisory locks serialize submission
+   keys and reused transaction references. Payments and invoice balance changes are
+   one transaction. Any recorded payment history blocks invoice edits/cancellation.
+   Tenant accounts cannot record successful payments; the fake Pay Now flow is gone.
+10. **Expenses/receipts.** Expense amount/category/property/method/status are validated.
+    Cancellation retains the expense and excludes it from paid dashboard totals;
+    the existing Expense Report separately includes non-cancelled pending expenses.
+    Refunds record an already-completed external return and preserve the original
+    payment amount/reference/notes plus separate reason, actor and timestamp. No
+    payment gateway or money transfer is implemented. Receipt identifiers are stable,
+    downloads re-fetch authorized persisted data and retain the original identity
+    snapshot. Generating a receipt creates no new payment.
+11. **Dashboards/tenant portal/reports.** Admin/Owner and Accountant financial cards,
+    charts, property revenue and reports are database-backed. Empty query results
+    remain empty, including charts. Tenant identity is loaded from the trusted
+    account-to-profile link, not by equating account and tenant UUIDs. Tenant ledger
+    rows include every installment, with independently paginated invoices and ledger.
+    Checkout leaves existing balances and payment history available without imposing
+    settlement or refund policies.
+12. **Performance.** SQL joins/aggregates handle balances, statuses, filtering,
+    reports, search, totals and sorting. Indexed FKs, billing periods, dates, enums
+    and unique identifiers support the common queries. Invoice items use select-in
+    loading; ledger pages batch-load selected rows rather than query per result.
+    Registers request 20-row pages and debounce search by 300 ms. Option requests
+    discard stale results; obsolete responses are not shown while a new filter loads.
+    Dashboard recent/due lists are capped at 10 and recent payments at 5. Existing
+    outstanding-report previews retain their 40-row limit, with SQL totals over the
+    entire authorized matching set.
+13. **Removed mocks.** Deleted `src/mock/{invoices,payments,expenses}.json`,
+    `src/services/finance/financeStore.ts`, unused Accountant/Tenant dashboard JSON
+    and `src/components/finance/PayNowModal.tsx`. Removed fake finance waits, fixture
+    CRUD, frontend aggregate/status hydration and financial fixture fields in the
+    Admin dashboard scaffold. Repository searches found no remaining imports of
+    those deleted sources or finance service references to tenantStore/localStorage.
+14. **Remaining boundaries.** Unfinished complaints, visitors, leave, notices,
+    document/support and maintenance services retain their isolated legacy mock
+    dependencies, including maintenance cost estimates. Admin operational dashboard
+    sections still use those unfinished services. They supply no invoice, payment,
+    expense or migrated financial statistic. Shared property/tenant fixtures needed
+    by unfinished modules and frozen migration/demo sources were preserved.
+15. **Actual browser verification.** The real React app and FastAPI ran against a
+    disposable PostgreSQL cluster, with explicit QA-only accounts and fixtures.
+    Executed: Super Admin login; invoice create, rent preview, edit discount,
+    detail/refresh; cash payments of 3,000 then 4,900 against a 7,900 invoice;
+    outstanding zero/paid status; receipt preview/download and downloaded content;
+    expense create (1,250.50), edit (1,200.25), refresh, search/sort/cancel; dependent
+    option reset and no-eligible-invoice state; Accountant assigned-property options,
+    dashboard and payments; Owner scoped invoice list and page 2 of 22 records;
+    cross-owner and cross-tenant invoice denial; unauthorized Security route 403;
+    canonical tenant checkout with 210 outstanding, retained history and receipt;
+    Revenue Report and property filter; tenant ledger/summary and phone/tablet/desktop
+    layout observations. Browser refresh exercised session restoration. SQL verified
+    the same invoice totals, payment sums and expense status. Expected denied network
+    requests were observed; console inspections during valid finance flows showed no
+    errors. This is not a claim that every requested scenario was individually run.
+16. **Defects fixed.** Corrected grouped SQL month expression binding; account/profile
+    UUID mismatch; absent accountant-compatible selectors; missing invoice edit UI;
+    reused form state on reopen; UTC date defaults showing the previous day; modal
+    overflow hiding submit controls; rounded-away paise; tenant history dropping
+    earlier successful installments; empty chart fixture fallback; hardcoded property
+    revenue; stale previous-filter responses; misleading migration-era tenant text;
+    and a zero-capacity occupancy percentage showing NaN during browser QA.
+17. **Backend tests.** Full retained suite: **109 passed**, including **16 finance
+    cases** on isolated PostgreSQL. Coverage includes invoice validation/totals/
+    numbering/edit/cancel/search/pages, payment partial/full/excess/invalid/retry/
+    concurrent balance safety/transaction rollback/receipt/refund, expense mutations
+    and aggregates, Owner/Accountant/Tenant scopes, unauthorized roles/receipts,
+    immutable snapshots, ledger installment paging, reports/property revenue and
+    migration upgrade/downgrade/schema comparison. Existing tests were preserved;
+    the old migration-head assertion was updated for `0006_finance`. Starlette's
+    existing httpx TestClient deprecation warning remains.
+18. **Frontend/schema verification.** Production build and ESLint pass. Alembic
+    upgrade/current/check pass on the configured application database: head is
+    `0006_finance`, with no schema drift. Existing Vite large-chunk and mixed-import
+    notices remain. No permanent frontend QA framework/scripts or npm test commands
+    were added. Run the final verification commands below with the existing venv.
+19. **QA cleanup.** Disposable financial records/accounts lived only in isolated
+    PostgreSQL. Temporary QA server scripts, cluster data and downloaded QA receipts
+    are removed after the final pass. The intentional application backup is retained
+    under ignored `Backend/backups/`. Reusable demo records and images remain intact.
+20. **Limits/unverified.** Not all 91 browser scenarios were executed individually.
+    Browser offline/500 injection, prolonged token-expiry stress, every role/property
+    permutation and production-scale load were not exhaustively tested. Invalid and
+    excessive payments, duplicate submissions, refund correction and concurrency
+    have backend regression coverage; they were not all forced through the browser.
+    Frontend date defaults and backend finance dates use Asia/Kolkata. Entity dropdowns paginate through
+    authorized option endpoints; very large option sets may benefit from a future
+    searchable selector. No recurring billing, advance payments, automated refunds,
+    tax accounting, external payment integration or automated checkout settlement
+    was introduced.
+
+### Latest verification rerun
+
+Aligned invoice status, payment date validation, dashboard date ranges and property
+revenue with the Asia/Kolkata date. Expense month and year figures now exclude later
+periods. Invoice, payment and expense row menus now have one native action button.
+On disposable PostgreSQL, the browser saved and reloaded a ₹7,996.75 invoice, a
+₹500.25 cash receipt and a ₹75.50 expense. Direct SQL confirmed the ₹7,496.50 balance
+and the persisted amounts. The browser displayed the receipt preview and opened all
+three row menus with Enter. Build, lint, Alembic current and schema comparison passed.
+The retained backend suite passed **110 tests**, including **17 finance cases**.
+The added regression verifies that expenses in later months or years stay out of
+the corresponding current-period figures.
+
+### Final verification commands
+
+Run from Backend using the existing environment; do not overwrite `.env`:
+
+```powershell
+.venv\Scripts\python.exe -m alembic upgrade head
+.venv\Scripts\python.exe -m alembic current
+.venv\Scripts\python.exe -m alembic check
+.venv\Scripts\python.exe -m pytest -q
+```
+
+Run from Fronted:
+
+```powershell
+npm.cmd ci
+npm.cmd run build
+npm.cmd run lint
+```
+
+### Rollback strategy
+
+Back up the application database and securely archive all finance records before an
+explicit rollback. `alembic downgrade 0005_inventory` removes only the four finance
+tables and therefore destroys their finance data; it does not reverse unrelated
+modules. Prefer rolling back application code while preserving the tables, or
+restoring the verified pre-migration custom-format dump into a separate database
+for recovery/inspection. Do not overwrite the live database or automatically run a
+downgrade during deployment. The backup contains private application data and is
+ignored by Git. Restart any API process that is not running with reload after
+installing the new module; the normal frontend API default remains port 8000.

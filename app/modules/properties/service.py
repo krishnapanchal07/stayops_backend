@@ -91,11 +91,21 @@ def image_output(image):
 
 def occupancy_counts(db):
     from app.modules.inventory.management import hierarchy
-    return {'hierarchy':hierarchy(db,list(db.scalars(select(Property.id))))}
+    return {'hierarchy':hierarchy(db,list(db.scalars(select(Property.id)))), 'revenues':monthly_revenues(db)}
+
+
+def monthly_revenues(db, property_ids=None):
+    from app.modules.finance.business_date import business_today
+    from app.modules.finance.models import Payment
+    stmt=select(Payment.property_id,func.sum(Payment.amount)).where(Payment.status=='SUCCESS',
+        Payment.payment_date >= business_today().replace(day=1)).group_by(Payment.property_id)
+    if property_ids is not None:
+        stmt=stmt.where(Payment.property_id.in_(property_ids))
+    return {key:float(amount) for key,amount in db.execute(stmt)}
 
 
 
-def output(item, occupied=None, public=False, detail=True):
+def output(item, occupied=None, public=False, detail=True, user=None):
     from app.modules.inventory.management import hierarchy
     db=object_session(item)
     buildings=(occupied or {}).get('hierarchy',{}).get(item.id)
@@ -111,8 +121,12 @@ def output(item, occupied=None, public=False, detail=True):
         status=item.status,latitude=item.latitude,longitude=item.longitude,isDemo=item.is_demo,
         images=gallery if detail else [],coverImage=cover)
     if not public:
+        can_finance=user is not None and user.role_id!='TENANT' and 'PAYMENT_VIEW' in {p.id for p in user.role.permissions}
+        revenue=(occupied or {}).get('revenues')
+        if revenue is None and can_finance:
+            revenue=monthly_revenues(db,[item.id])
         result.update(ownerUserId=str(item.owner_user_id) if item.owner_user_id else None,isPublic=item.is_public,
-            contactNumber=item.contact_number,email=item.email,monthlyRevenue=0,recentActivity=[],
+            contactNumber=item.contact_number,email=item.email,monthlyRevenue=(revenue or {}).get(item.id,0) if can_finance else None,recentActivity=[],
             buildings=buildings,
             totalBuildings=len(buildings),totalFloors=len(floors),
             totalRooms=sum(f['roomCount'] for f in floors),totalBeds=beds,occupiedBeds=count,availableBeds=sum(f['availableBeds'] for f in floors),

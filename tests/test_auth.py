@@ -34,7 +34,7 @@ def test_health_and_migrations(setup):
     assert client.get("/api/v1/health").json()["database"] == "ok"
     with engine.connect() as connection:
         assert connection.execute(text("SELECT version() ")).scalar().startswith("PostgreSQL 18")
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0005_inventory"
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0006_finance"
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(Role)) == 7

@@ -8,9 +8,11 @@ class WorkflowBodyLimit:
 
     async def __call__(self, scope, receive, send):
         path = scope.get('path', '')
-        if scope['type'] != 'http' or scope.get('method') not in {'POST', 'PATCH'} or not path.startswith(('/api/v1/inquiries', '/api/v1/tenants', '/api/v1/staff', '/api/v1/properties', '/api/v1/rooms', '/api/v1/buildings', '/api/v1/floors', '/api/v1/beds')):
+        if scope['type'] != 'http' or scope.get('method') not in {'POST', 'PATCH'} or not path.startswith(('/api/v1/finance', '/api/v1/inquiries', '/api/v1/tenants', '/api/v1/staff', '/api/v1/properties', '/api/v1/rooms', '/api/v1/buildings', '/api/v1/floors', '/api/v1/beds')):
             return await self.app(scope, receive, send)
         maximum = 16_384 if path.startswith('/api/v1/inquiries') else 7_100_000
+        if path.startswith('/api/v1/finance'):
+            maximum = 65536
         if path.startswith(('/api/v1/properties','/api/v1/rooms','/api/v1/buildings','/api/v1/floors','/api/v1/beds')):
             maximum = (4 * 1024 * 1024 * 12 + 65536) if path.endswith('/images') else 32768
         chunks, size = [], 0
