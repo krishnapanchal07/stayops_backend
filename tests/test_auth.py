@@ -1,5 +1,6 @@
 from app.modules.properties.models import Property
 import json
+import re
 from datetime import timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -34,7 +35,7 @@ def test_health_and_migrations(setup):
     assert client.get("/api/v1/health").json()["database"] == "ok"
     with engine.connect() as connection:
         assert connection.execute(text("SELECT version() ")).scalar().startswith("PostgreSQL 18")
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0007_razorpay"
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0008_complaints"
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(Role)) == 7
@@ -56,8 +57,12 @@ def test_migration_round_trip(setup):
 
 def test_seed_contract_matches_frontend():
     root = Path(__file__).resolve().parents[2]
-    for name in ("roles.json", "permissions.json"):
-        assert json.loads((root / "Fronted/src/mock" / name).read_text()) == json.loads((root / "Backend/app/modules/auth" / name).read_text())
+    auth = root / "Backend/app/modules/auth"
+    constants = root / "Fronted/src/constants"
+    for name in ("roles", "permissions"):
+        backend = {record["id"] for record in json.loads((auth / f"{name}.json").read_text())}
+        frontend = set(re.findall(r"^\s+[A-Z_]+: '([A-Z_]+)',", (constants / f"{name}.ts").read_text(), re.MULTILINE))
+        assert frontend == backend
 
 
 def test_unique_normalized_email(setup):

@@ -115,12 +115,6 @@ def activity(tenant_id: UUID, db: Session = Depends(get_db), user=Depends(requir
         'occurredAt': e.occurred_at.isoformat()} for e in db.scalars(stmt)]
 
 
-@router.get('/{tenant_id}/documents')
-def documents(tenant_id: UUID, db: Session = Depends(get_db), user=Depends(require_permission('TENANT_VIEW'))):
-    service.get(db, tenant_id, user)
-    return []  # No document storage has been implemented in this phase.
-
-
 @router.post('/{tenant_id}/invite', dependencies=[Depends(require_trusted_origin)])
 def invite(tenant_id: UUID, request: Request, db: Session = Depends(get_db), user=Depends(require_role('SUPER_ADMIN'))):
     limiter.auth(request, 'tenant-invite', str(user.id))

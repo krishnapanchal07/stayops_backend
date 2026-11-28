@@ -302,11 +302,15 @@ def test_additive_migration_preserves_previous_phase_records(setup):
     with engine.begin() as connection:
         config.attributes['connection'] = connection
         command.downgrade(config, '0002_inquiries_tenants')
-        protected = [name for name in inspect(connection).get_table_names() if name != 'alembic_version']
+        protected = [name for name in inspect(connection).get_table_names()
+                     if name not in {'alembic_version', 'permissions', 'role_permissions'}]
         before = {name: connection.execute(text(f'SELECT count(*) FROM "{name}"')).scalar() for name in protected}
         command.upgrade(config, 'head')
         after = {name: connection.execute(text(f'SELECT count(*) FROM "{name}"')).scalar() for name in protected}
         assert before == after
+        assert connection.scalar(text("SELECT count(*) FROM permissions WHERE id = 'FINANCE_REPORT_VIEW'")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM permissions WHERE id ~ '^(VISITOR|LEAVE|NOTICE|DOCUMENT|SUPPORT|AUDIT)_'")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM roles WHERE id='SECURITY'")) == 1
         assert 'staff_profiles' in inspect(connection).get_table_names()
 
 

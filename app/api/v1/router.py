@@ -23,6 +23,8 @@ from app.modules.inventory.discovery import router as discovery_router
 router.include_router(discovery_router)
 from app.modules.finance.router import router as finance_router
 router.include_router(finance_router)
+from app.modules.complaints.router import router as complaints_router
+router.include_router(complaints_router)
 
 
 @router.get("/health", tags=["Health"])

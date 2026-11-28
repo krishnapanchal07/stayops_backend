@@ -170,7 +170,7 @@ def test_tenant_crud_allocation_conflict_and_scope(setup):
     assert client.post(f"/api/v1/tenants/{first['id']}/allocate", json=allocation, headers=headers).status_code == 200
     assert client.post(f"/api/v1/tenants/{second['id']}/allocate", json=allocation, headers=headers).status_code == 409
     assert client.post('/api/v1/inquiries', json=ROOM).status_code == 409
-    assert client.get(f"/api/v1/tenants/{first['id']}/documents", headers=headers).json() == []
+    assert client.get(f"/api/v1/tenants/{first['id']}/documents", headers=headers).status_code == 404
     assert client.get(f"/api/v1/tenants/{first['id']}/activity", headers=headers).json()
     owner = authorization(sign_in(client, 'owner@example.com'))
     assert client.get(f"/api/v1/tenants/{first['id']}", headers=owner).status_code == 403

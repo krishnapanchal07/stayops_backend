@@ -11,6 +11,7 @@ from app.modules.staff import models as staff_models  # noqa: F401
 from app.modules.properties import models as property_models
 from app.modules.inventory import models as inventory_models
 from app.modules.finance import models as finance_models
+from app.modules.complaints import models as complaint_models
 
 config = context.config
 target_metadata = Base.metadata

@@ -1,10 +1,87 @@
 > Frontend test cleanup: the temporary Node test scripts, custom TypeScript/VM loader, npm test commands, and their backend Node integration runner were removed at the user's request. Earlier test results and implementation file lists below are historical; those frontend tests are no longer retained.
 
-# StayOps backend: foundation and authentication
+# StayOps backend
 
 FastAPI modular monolith, synchronous SQLAlchemy 2.0, Psycopg 3, PostgreSQL 18,
-Alembic, Argon2id (pwdlib), and PyJWT. No public signup, OTP, business APIs, or
-mock-user imports. `Fronted/` remains the existing React application.
+Alembic, Argon2id (pwdlib), and PyJWT. The API serves the existing React app
+with role-based authentication, inquiries, tenants, staff, properties, inventory,
+public PG discovery, finance, complaints, and maintenance.
+
+## Phase 6 complaint and maintenance operations
+
+Migration `0008_complaints` adds `complaints`, `complaint_comments`,
+`complaint_events`, `complaint_attachments`, and `maintenance_tasks`. A complaint
+references the existing tenant, property, room, and optional assigned staff
+account. Children reference the complaint, and comments, attachments, and events
+record the actor. The complaint stores tenant and location name snapshots so the
+original context remains available after a move or checkout. A partial unique
+index allows one active maintenance task per complaint while keeping past tasks.
+
+Tenants submit against their own current allocation. Authorized managers can
+create a complaint for an eligible tenant, review it, assign it to eligible
+maintenance staff, escalate it, resolve it, or reject it according to status.
+Initial SLA deadlines are 72 hours for Low, 48 for Medium, 24 for High, and 4 for
+Urgent. The linked task progresses from assignment to work in progress and then
+completion. Starting a task advances the complaint. Completion records the
+resolution, parts, completion date, and cost and resolves the complaint in the
+same transaction. The tenant can accept the resolution and close it or reopen
+it. A new assignment can follow reopening, with the completed task in history.
+
+All routes use `/api/v1` and enforce authorization before returning records.
+
+| Endpoint | Methods and use |
+| --- | --- |
+| `/complaints` | `GET` list, filter, sort, and page; `POST` create |
+| `/complaints/summary` | `GET` scoped dashboard counts |
+| `/complaints/options/staff`, `/complaints/options/tenants` | `GET` eligible assignees and occupants |
+| `/complaints/{id}` | `GET` detail |
+| `/complaints/{id}/assign`, `/escalate`, `/resolve`, `/close`, `/reopen` | `POST` lifecycle actions under the complaint detail path |
+| `/complaints/{id}/status` | `PATCH` permitted status changes |
+| `/complaints/{id}/comments`, `/timeline` | `GET` authorized history; `POST` on `/comments` adds a comment |
+| `/complaints/{id}/attachments/{attachment_id}` | `GET` authorized image |
+| `/maintenance/tasks`, `/maintenance/tasks/summary`, `/maintenance/tasks/{id}` | `GET` scoped list, summary, and detail |
+| `/maintenance/tasks/{id}/start`, `/complete` | `POST` task actions under the task detail path |
+| `/maintenance/tasks/{id}/status` | `PATCH` authorized task status changes |
+
+Super Admin has global scope. Owners and Wardens are scoped to owned and assigned
+properties, respectively. Maintenance accounts can access their assigned tasks
+and necessary complaint context. Tenants can access their own complaints and
+public updates. Internal notes and staff costs are withheld from tenants.
+Accountant and Security have no complaint or maintenance access. Security accounts
+remain valid. The existing finance report grants now use `FINANCE_REPORT_VIEW`.
+
+Complaint creation accepts JPEG, PNG, or WebP files smaller than 4 MiB each.
+The server verifies and re-encodes images. Private files live in the configured
+image directory, and the attachment endpoint checks complaint access before
+serving a file. Include the image directory in environment backups alongside
+PostgreSQL. Complaint costs are operational records. Finance continues to use
+its existing invoice, payment, expense, receipt, and reporting APIs.
+
+Visitors and entry/exit, leave and gate passes, notices and the notification
+center, general document management, support tickets, standalone audit, and
+general reports were removed. Migration `0008_complaints` cleans the corresponding
+permission grants and keeps the existing business tables. The former placeholder
+`GET /tenants/{id}/documents` was removed. Earlier phase notes below are historical
+and describe behavior as it existed in each phase.
+
+### Phase 6 migration and verification
+
+The local development database was backed up before upgrading from
+`0007_razorpay`. `alembic current` returned `0008_complaints (head)` and
+`alembic check` found no pending schema changes. An archive comparison verified
+matching row counts in 26 pre-existing tables. One refresh session was created
+after the snapshot. The five new workflow tables were empty in the development
+database. The backup is in the local `backups` directory.
+
+`pip check` found no broken requirements and the PostgreSQL-backed suite passed
+all 122 tests. The complaint regression exercises trusted occupancy, scoped
+tenant and staff options, private image reads, replay and concurrent assignment,
+public and internal comments, task completion, reopening, closure, and history
+after checkout. Browser tests ran with separate disposable PostgreSQL databases.
+They verified tenant submission and persistence, management review and assignment,
+technician start and same-day completion, and tenant closure after refresh.
+The browser database recorded a closed complaint and a completed task with
+an actual cost of ₹150.50. The disposable databases and test files were removed.
 
 ## Windows PowerShell setup
 

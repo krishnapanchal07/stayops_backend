@@ -19,7 +19,7 @@ def money(value):
 
 
 def report(db,user,kind,filters):
-    permission(user,'REPORT_VIEW')
+    permission(user,'FINANCE_REPORT_VIEW')
     s.authorize(user,{'REVENUE':'invoices','PAYMENTS':'payments','OUTSTANDING':'invoices','EXPENSES':'expenses'}[kind])
     def metric(key,label,value,tone='primary'):
         return dict(id=key,label=label,value=str(value),tone=tone)
