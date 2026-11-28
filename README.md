@@ -1052,3 +1052,142 @@ for recovery/inspection. Do not overwrite the live database or automatically run
 downgrade during deployment. The backup contains private application data and is
 ignored by Git. Restart any API process that is not running with reload after
 installing the new module; the normal frontend API default remains port 8000.
+
+## Phase 5B — Razorpay Test Mode
+
+StayOps uses one Razorpay Test Mode account across all properties. Keep
+`RAZORPAY_ENABLED=true`, `RAZORPAY_MODE=test`, and the `rzp_test_` key ID and its
+secret in the ignored `Backend/.env`. The default is disabled. Missing credentials
+hide Pay Now and leave manual Finance available. Live mode and non-test key IDs
+are rejected. Keep the webhook secret empty for localhost. The public key ID is
+returned only with a tenant's eligible checkout order. The private keys never go
+to React. `.env.example` lists the settings without credentials.
+
+Install the pinned requirements in the existing virtual environment. Razorpay
+Python SDK 2.0.1 performs order creation, payment lookup, and Checkout signature
+verification. HTTP calls have bounded connect and read timeouts. Browser checkout
+uses Razorpay's official hosted script and collects payment details on Razorpay.
+StayOps deliberately sends no tenant contact prefill to the payment provider.
+
+### Migration and rollback
+
+`0007_razorpay` follows `0006_finance`. It adds `finance_payment_orders`,
+`finance_razorpay_events`, and the `finance_payments.source` field. Existing ledger
+rows default to `MANUAL`. Orders reference the invoice's tenant and property via a
+composite foreign key and link to at most one canonical Finance payment. Provider
+order IDs, provider payment IDs, linked payments and Razorpay ledger references
+have uniqueness constraints. Store currency and integer paise on each attempt.
+Only event IDs, types and processing timestamps are retained for webhook deduplication.
+
+Before applying the revision, use `pg_dump -Fc` and verify the backup with
+`pg_restore -l`. Then run `.venv\Scripts\python.exe -m alembic upgrade head`,
+`alembic current` and `alembic check` in the same environment. The local rehearsal
+verified a pre-migration dump at `backups/before-razorpay-20261127-004307.dump`
+and unchanged pre-existing row counts across all 27 application tables checked.
+Set `RAZORPAY_ENABLED=false` to stop online checkout while keeping source labels
+and history. A downgrade is guarded once order or Test Mode payment history
+exists because removing the source field could relabel test money. To inspect
+the pre-migration state, restore the backup to a **separate** PostgreSQL database.
+
+### API and order lifecycle
+
+All paths are under `/api/v1/finance`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/me/razorpay/config` | Checkout availability for the linked tenant |
+| POST | `/me/razorpay/orders` | Reserve or reuse the current outstanding balance and return Checkout options |
+| GET | `/me/razorpay/orders/{id}` | Read the tenant's saved attempt without contacting Razorpay |
+| POST | `/me/razorpay/orders/{id}/recheck` | Recover an order or check provider status after refresh |
+| POST | `/me/razorpay/verify` | Verify the Checkout signature and fetch the provider payment |
+| GET | `/razorpay/attempts?invoiceId={id}` | Recent attempts for the authorized invoice |
+| GET | `/razorpay/attempts` | Scoped reconciliation list for Finance staff |
+| POST | `/razorpay/webhook` | Receive signed Razorpay payment and order events |
+
+The server calculates the balance using the existing ledger, converts Decimal
+rupees to integer paise, and requires at least ₹1. Razorpay enforces the merchant
+account's order ceiling. The invoice lock and unique open attempt constraint
+prevent duplicate orders for one balance. The server commits the local attempt
+before the external order request. If the response is ambiguous, **Check status**
+looks up the same unique receipt in Razorpay. It never repeats the order POST.
+If lookup finds no order, use the local attempt ID and its `stayops-<UUID without
+hyphens>` receipt to investigate in the Test Mode Dashboard. Manual payments
+remain available while an ambiguous attempt is under review.
+
+Closing Checkout leaves the existing order reusable. An authorized payment
+stays pending until Razorpay confirms capture. The signed callback always uses
+the persisted order ID and an authenticated payment lookup. Recheck and webhook
+processing also use authenticated Test Mode API data. They share the same
+invoice-locking finalization path with Checkout verification. A paid order can
+apply once. Staff can still record manual payments and perform eligible invoice
+edits or cancellation. If a previously opened Checkout captures after the balance
+changes, the attempt retains the provider reference, displays a review notice in
+Payment Management and does not change that balance or create a second receipt.
+No gateway refunds are performed. The external refund control remains available
+for manual payments only.
+
+Test receipts include the persisted Razorpay reference and an explicit notice
+that no money moved. Test payments reduce balances for the demo workflow and are
+shown separately in actual collection, revenue, and property reports. Their
+amounts are excluded from actual collection metrics, charts and net income.
+Use a QA tenant and invoice for testing so you do not settle a genuine invoice
+with simulated funds. Tenant Checkout and order status require the trusted
+account linkage, and staff review uses existing property scope. Browser writes
+use existing CSRF checks. The webhook has its own raw-body HMAC check.
+
+### Public webhook setup
+
+1. Use a reachable HTTPS deployment and the URL
+   `https://<your-api-host>/api/v1/finance/razorpay/webhook`. Localhost does not accept
+   public delivery.
+2. In the Razorpay Dashboard, select **Test Mode**, open **Account & Settings →
+   Webhooks**, and choose **Add New Webhook**.
+3. Enter that URL and a strong webhook secret. Set the same value for
+   `RAZORPAY_WEBHOOK_SECRET` on the backend and restart it. The webhook secret is
+   independent of the API key secret.
+4. Subscribe to `payment.captured`, `payment.failed`, and `order.paid`. Save and
+   create a disposable test invoice. Check delivery status and confirm that the
+   event links at most one Finance receipt. Existing retries must be signed with a
+   secret the backend currently accepts.
+
+Official references: [Standard Checkout and test payment methods](https://razorpay.com/docs/payments/payment-gateway/web-integration/standard/integration-steps/)
+and [webhook validation](https://razorpay.com/docs/webhooks/validate-test/).
+
+### Verification on 27 November 2026
+
+Real Razorpay Test Mode credentials passed an authenticated API lookup. Browser QA
+used a separate PostgreSQL cluster with disposable records. A ₹7,996.75 invoice
+with ₹500.25 already paid in cash opened an order for 749650 paise. Razorpay's demo
+bank captured ₹7,496.50. The backend verified it and PostgreSQL recorded one test
+receipt. Refresh showed a paid invoice, zero outstanding balance and both payment
+records. The receipt preview displayed the Test Mode notice. Admin Payment
+Management showed ₹500.25 actual collections and ₹7,496.50 Test Mode applied.
+
+A separate ₹25 Checkout was dismissed, reopened and declined in the official
+test bank. The status recheck matched Razorpay, the amount due stayed ₹25, and
+no payment entered the ledger. A fully unpaid ₹31 invoice settled in mobile
+Checkout. Direct provider and PostgreSQL checks matched all three attempts and
+found two test ledger payments and one manual payment. Browser QA found and
+fixed horizontal overflow from long finance identifiers. The invoice page did
+not overflow at the 390 px phone and 768 px tablet retest widths.
+
+| Razorpay Test Mode order | Razorpay payment | Outcome |
+| --- | --- | --- |
+| `order_U4urNSfEkRm6JM` | `pay_U4usRgprAzqv09` | ₹7,496.50 captured and applied |
+| `order_U4utQVxJW1bRM5` | `pay_U4uuYsmG93PxGa` | ₹25 declined and left unpaid |
+| `order_U4uykozC1KDJOi` | `pay_U4uz4x3WZKuokL` | ₹31 captured and applied |
+
+The three transactions remain in provider Test Mode history. The disposable
+PostgreSQL cluster and temporary browser QA files were removed. The application
+database had no QA records added and kept its migration backup.
+
+The full PostgreSQL suite passed **121 tests**, including 11 new Razorpay cases.
+The added cases cover test-only settings, disabled mode, ownership, exact paise,
+signed callbacks and webhooks, mismatch rejection, pending and failed status, order
+timeout recovery, concurrency, reconciliation, receipts and reporting separation.
+Build, lint, `pip check`, Alembic `current` and schema comparison passed. The
+runtime audit found no simulated success, private key in frontend code, or browser
+payment storage. The existing Starlette deprecation and Vite build warnings remain.
+Signed webhook tests use isolated provider responses. Public webhook delivery was
+not configured or verified. Browser QA covered the above workflows rather than
+all 86 requested scenarios.

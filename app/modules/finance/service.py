@@ -80,15 +80,23 @@ def invoice_output(item, received=Decimal(0), status=None):
 
 
 def invoice_detail(db, item):
-    received = db.scalar(select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.invoice_id == item.id, Payment.status == 'SUCCESS'))
-    return invoice_output(item, received)
+    return invoice_output(item, invoice_received(db, item.id))
+
+
+def invoice_received(db, invoice_id):
+    return db.scalar(select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.invoice_id == invoice_id, Payment.status == 'SUCCESS'))
+
+
+def invoice_balance(db, invoice):
+    return Decimal(0) if invoice.cancelled else invoice.total - invoice_received(db, invoice.id)
 
 
 def payment_output(item):
     return dict(id=str(item.id), paymentNumber=item.payment_number, receiptNumber=item.receipt_number, invoiceId=str(item.invoice_id),
         tenantId=str(item.tenant_id), propertyId=item.property_id, **item.snapshot, amount=float(item.amount),
         paymentDate=str(item.payment_date), method=item.method, status=item.status, reference=item.reference, notes=item.notes,
-        refundReason=item.refund_reason, createdAt=item.created_at.isoformat())
+        refundReason=item.refund_reason, createdAt=item.created_at.isoformat(),
+        source=item.source, isTest=item.source == 'RAZORPAY_TEST')
 
 
 def expense_output(item):
@@ -146,8 +154,7 @@ def record_payment(db, values, user, key):
     invoice = get(db, Invoice, values.invoiceId, user, lock=True)
     if invoice.tenant_id != values.tenantId:
         raise HTTPException(422, 'Invoice does not belong to this tenant.')
-    received = db.scalar(select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.invoice_id == invoice.id, Payment.status == 'SUCCESS'))
-    if invoice.cancelled or values.amount > invoice.total - received:
+    if values.amount > invoice_balance(db, invoice):
         raise HTTPException(409, 'Payment exceeds the outstanding balance or invoice is cancelled.')
     if values.paymentDate < invoice.issue_date:
         raise HTTPException(422, 'Payment cannot precede the invoice issue date.')
@@ -156,17 +163,25 @@ def record_payment(db, values, user, key):
         lock_key = f'payment-reference:{invoice.property_id}:{values.method}:{values.reference.casefold()}'
         db.execute(text('SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))'), {'key': lock_key})
         duplicate = db.scalar(select(Payment.id).where(Payment.property_id == invoice.property_id,
-            Payment.method == values.method, func.lower(Payment.reference) == values.reference.lower()))
+            Payment.source == 'MANUAL', Payment.method == values.method, func.lower(Payment.reference) == values.reference.lower()))
         if duplicate:
             raise HTTPException(409, 'This transaction reference has already been recorded.')
+    payment = add_successful_payment(db, invoice, user.id, values.amount, values.paymentDate,
+        values.method, values.reference, values.notes, request_key, digest)
+    db.commit()
+    return payment
+
+
+def add_successful_payment(db, invoice, actor_id, amount, payment_date, method, reference,
+                           notes, request_key, digest, *, source='MANUAL'):
+    """Create a ledger entry after the caller locks the invoice and validates the balance."""
     token = uuid4().hex.upper()
     snapshot = {k:v for k,v in invoice.snapshot.items() if k in {'tenantName','propertyName','roomNumber'}}
     payment = Payment(payment_number='PAY-' + token, receipt_number='RCT-' + token, invoice_id=invoice.id,
         tenant_id=invoice.tenant_id, property_id=invoice.property_id, snapshot=snapshot | {'invoiceNumber':invoice.invoice_number},
-        amount=values.amount, payment_date=values.paymentDate, method=values.method, reference=values.reference,
-        notes=values.notes, created_by=user.id, request_key=request_key, request_digest=digest)
+        amount=amount, payment_date=payment_date, method=method, reference=reference,
+        notes=notes, created_by=actor_id, request_key=request_key, request_digest=digest, source=source)
     db.add(payment)
-    db.commit()
     return payment
 
 
@@ -214,6 +229,8 @@ def listing(db, user, kind, filters):
             stmt = stmt.where(Invoice.due_date < business_today())
     if model is Payment and filters.method:
         stmt = stmt.where(Payment.method == filters.method)
+    if model is Payment and filters.source:
+        stmt = stmt.where(Payment.source == filters.source)
     if model is Expense and filters.category:
         stmt = stmt.where(Expense.category == filters.category)
     date_column = {Invoice:Invoice.issue_date, Payment:Payment.payment_date, Expense:Expense.expense_date}[model]

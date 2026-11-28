@@ -10,6 +10,7 @@ from app.modules.auth.dependencies import get_active_user, require_trusted_origi
 from app.modules.finance import service as s
 from app.modules.finance.summary import overview, tenant_summary
 from app.modules.finance.models import Invoice, Payment, Expense
+from app.modules.finance.razorpay_router import router as razorpay_router
 from app.modules.finance.schemas import InvoiceWrite, PaymentWrite, ExpenseWrite, Refund
 from app.modules.tenants.models import Tenant
 from app.modules.tenants.service import output as tenant_output, permission
@@ -17,6 +18,7 @@ from app.modules.properties.models import Property
 from app.core.security import now
 
 router = APIRouter(prefix='/finance', tags=['Finance'])
+router.include_router(razorpay_router)
 write = [Depends(require_trusted_origin)]
 
 class Filters(BaseModel):
@@ -29,6 +31,7 @@ class Filters(BaseModel):
     billingPeriod: str = Field('',max_length=7)
     dueStatus: Literal['','DUE','OVERDUE','PAID'] = ''
     method: str = Field('',max_length=24)
+    source: Literal['','MANUAL','RAZORPAY_TEST'] = ''
     category: str = Field('',max_length=24)
     fromDate: date | None = None
     toDate: date | None = None
@@ -98,13 +101,13 @@ def expenses(filters:Filters=Depends(),db:Session=Depends(get_db),user=Depends(g
 def invoice_totals(db:Session=Depends(get_db),user=Depends(get_active_user)):
     s.authorize(user,'invoices')
     v=overview(db,user)
-    return {k:v[k] for k in ('billed','collected','outstanding','overdue')} | {'count':v['invoiceCount']}
+    return {k:v[k] for k in ('billed','collected','testCollected','outstanding','overdue')} | {'count':v['invoiceCount']}
 
 @router.get('/payments/summary')
 def payment_totals(db:Session=Depends(get_db),user=Depends(get_active_user)):
     s.authorize(user,'payments')
     v=overview(db,user)
-    return dict(collected=v['collected'],pending=v['pendingPayments'],overdue=v['overdue'],todayCollection=v['todayCollected'])
+    return dict(collected=v['collected'],testCollected=v['testCollected'],pending=v['pendingPayments'],overdue=v['overdue'],todayCollection=v['todayCollected'])
 
 @router.get('/expenses/summary')
 def expense_totals(db:Session=Depends(get_db),user=Depends(get_active_user)):
@@ -154,6 +157,8 @@ def refund(payment_id:UUID,values:Refund,db:Session=Depends(get_db),user=Depends
     item=s.get(db,Payment,payment_id,user)
     s.get(db,Invoice,item.invoice_id,user,True)
     db.refresh(item,with_for_update=True)
+    if item.source == 'RAZORPAY_TEST':
+        raise HTTPException(409,'Razorpay Test Mode receipts cannot be marked as external refunds.')
     if item.status != 'SUCCESS':
         raise HTTPException(409,'Only successful payments can be marked refunded.')
     item.status='REFUNDED'

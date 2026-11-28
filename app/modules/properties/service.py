@@ -97,7 +97,7 @@ def occupancy_counts(db):
 def monthly_revenues(db, property_ids=None):
     from app.modules.finance.business_date import business_today
     from app.modules.finance.models import Payment
-    stmt=select(Payment.property_id,func.sum(Payment.amount)).where(Payment.status=='SUCCESS',
+    stmt=select(Payment.property_id,func.sum(Payment.amount)).where(Payment.status=='SUCCESS', Payment.source=='MANUAL',
         Payment.payment_date >= business_today().replace(day=1)).group_by(Payment.property_id)
     if property_ids is not None:
         stmt=stmt.where(Payment.property_id.in_(property_ids))

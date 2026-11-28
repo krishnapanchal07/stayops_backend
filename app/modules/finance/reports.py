@@ -38,14 +38,14 @@ def report(db,user,kind,filters):
     if kind=='REVENUE':
         totals=overview(db,user,filters.propertyId,filters.fromDate,filters.toDate)
         iq=scoped(Invoice,Invoice.issue_date).where(Invoice.cancelled.is_(False)).subquery()
-        pq=scoped(Payment,Payment.payment_date).where(Payment.status=='SUCCESS').subquery()
+        pq=scoped(Payment,Payment.payment_date).where(Payment.status=='SUCCESS',Payment.source=='MANUAL').subquery()
         im=func.to_char(iq.c.issue_date,'YYYY-MM')
         pm=func.to_char(pq.c.payment_date,'YYYY-MM')
         combined=union_all(select(im.label('month'),func.sum(iq.c.total).label('billed'),literal(0).label('collected')).group_by(im),
             select(pm,literal(0),func.sum(pq.c.amount)).group_by(pm)).subquery()
         groups=db.execute(select(combined.c.month,func.sum(combined.c.billed),func.sum(combined.c.collected)).group_by(combined.c.month).order_by(combined.c.month)).all()
-        return result('Revenue Report',[metric(k,label,money(totals[k])) for k,label in [('billed','Total Invoiced'),('collected','Total Collected'),('outstanding','Outstanding'),('overdue','Overdue')]],
-            [('month','Month'),('billed','Invoiced'),('collected','Collected')],
+        return result('Revenue Report',[metric(k,label,money(totals[k])) for k,label in [('billed','Total Invoiced'),('collected','Actual Collections'),('testCollected','Test Mode Applied'),('outstanding','Outstanding'),('overdue','Overdue')]],
+            [('month','Month'),('billed','Invoiced'),('collected','Actual Collections')],
             [dict(id=m,label=m,values=dict(month=m,billed=money(b),collected=money(c))) for m,b,c in groups],
             [dict(label=m,value=float(c)) for m,b,c in groups])
     if kind=='PAYMENTS':
@@ -54,10 +54,10 @@ def report(db,user,kind,filters):
             stmt=stmt.where(Payment.status==filters.status)
         table=stmt.subquery()
         counts=dict(db.execute(select(table.c.status,func.count()).group_by(table.c.status)).all())
-        groups=db.execute(select(table.c.method,func.count(),func.sum(table.c.amount)).where(table.c.status=='SUCCESS').group_by(table.c.method)).all()
+        groups=db.execute(select(table.c.source,table.c.method,func.count(),func.sum(table.c.amount)).where(table.c.status=='SUCCESS').group_by(table.c.source,table.c.method)).all()
         return result('Payment Report',[metric('total','Total Payments',sum(counts.values()))]+[metric(k.lower(),label,counts.get(k,0)) for k,label in [('SUCCESS','Successful'),('PENDING','Pending'),('FAILED','Failed'),('REFUNDED','Refunded')]],
-            [('method','Method'),('count','Successful count'),('amount','Amount')],
-            [dict(id=m,label=m.replace('_',' ').title(),values=dict(method=m.replace('_',' ').title(),count=c,amount=money(a))) for m,c,a in groups])
+            [('source','Source'),('method','Method'),('count','Successful count'),('amount','Amount')],
+            [dict(id=f'{source}-{m}',label=m.replace('_',' ').title(),values=dict(source='Razorpay Test Mode' if source=='RAZORPAY_TEST' else 'Manual',method=m.replace('_',' ').title(),count=c,amount=money(a))) for source,m,c,a in groups])
     if kind=='EXPENSES':
         stmt=scoped(Expense,Expense.expense_date).where(Expense.status!='CANCELLED')
         if filters.category:

@@ -34,22 +34,26 @@ def overview(db, user, property_id='', from_date=None, to_date=None, tenant_id=N
     next_month = (month + timedelta(days=32)).replace(day=1)
     next_year = year.replace(year=year.year + 1)
     billed = aggregate(iq, iq.c.total, iq.c.cancelled.is_(False))
-    collected = aggregate(pq, pq.c.amount, pq.c.status == 'SUCCESS')
+    actual = (pq.c.status == 'SUCCESS', pq.c.source == 'MANUAL')
+    test = (pq.c.status == 'SUCCESS', pq.c.source == 'RAZORPAY_TEST')
+    collected = aggregate(pq, pq.c.amount, *actual)
+    test_collected = aggregate(pq, pq.c.amount, *test)
     outstanding = aggregate(iq, iq.c.outstanding)
     overdue = aggregate(iq, iq.c.outstanding, iq.c.due_date < today)
     expense_total = aggregate(eq, eq.c.amount, eq.c.status == 'PAID')
     month_label = func.to_char(pq.c.payment_date, 'YYYY-MM')
-    trend = db.execute(select(month_label, func.sum(pq.c.amount)).where(pq.c.status == 'SUCCESS', pq.c.payment_date >= year).group_by(month_label).order_by(month_label)).all()
-    methods = db.execute(select(pq.c.method, func.sum(pq.c.amount)).where(pq.c.status == 'SUCCESS').group_by(pq.c.method)).all()
+    trend = db.execute(select(month_label, func.sum(pq.c.amount)).where(*actual, pq.c.payment_date >= year).group_by(month_label).order_by(month_label)).all()
+    methods = db.execute(select(pq.c.method, func.sum(pq.c.amount)).where(*actual).group_by(pq.c.method)).all()
     breakdown = db.execute(select(eq.c.category, func.sum(eq.c.amount)).where(eq.c.status == 'PAID').group_by(eq.c.category)).all()
     open_rows = db.execute(invoices.where(s.outstanding > 0).order_by(Invoice.due_date, Invoice.id).limit(10)).all()
     due_rows = db.execute(invoices.where(s.outstanding > 0, Invoice.due_date == today).order_by(Invoice.id).limit(10)).all()
     recent = db.scalars(payments.order_by(Payment.created_at.desc()).limit(5)).all()
-    return dict(billed=billed, collected=collected, outstanding=outstanding, overdue=overdue,
+    return dict(billed=billed, collected=collected, testCollected=test_collected, outstanding=outstanding, overdue=overdue,
         overdueAccounts=db.scalar(select(func.count(func.distinct(iq.c.tenant_id))).where(iq.c.outstanding > 0, iq.c.due_date < today)),
         invoiceCount=db.scalar(select(func.count()).select_from(iq)),
-        thisMonthCollected=aggregate(pq,pq.c.amount,pq.c.status == 'SUCCESS',pq.c.payment_date >= month),
-        todayCollected=aggregate(pq,pq.c.amount,pq.c.status == 'SUCCESS',pq.c.payment_date == today),
+        thisMonthCollected=aggregate(pq,pq.c.amount,*actual,pq.c.payment_date >= month),
+        thisMonthTestCollected=aggregate(pq,pq.c.amount,*test,pq.c.payment_date >= month),
+        todayCollected=aggregate(pq,pq.c.amount,*actual,pq.c.payment_date == today),
         pendingPayments=aggregate(pq,pq.c.amount,pq.c.status == 'PENDING'), expenses=expense_total,
         thisMonthExpenses=aggregate(eq,eq.c.amount,eq.c.status == 'PAID',eq.c.expense_date >= month,eq.c.expense_date < next_month),
         thisYearExpenses=aggregate(eq,eq.c.amount,eq.c.status == 'PAID',eq.c.expense_date >= year,eq.c.expense_date < next_year),
@@ -59,7 +63,8 @@ def overview(db, user, property_id='', from_date=None, to_date=None, tenant_id=N
         paymentMethods=[dict(name=c.replace('_',' ').title(),value=float(a)) for c,a in methods],
         pendingInvoiceRows=[dict(id=str(i.id),tenant=i.snapshot['tenantName'],room=i.snapshot.get('roomNumber') or '—',amount=float(balance),dueDate=str(i.due_date),status='Overdue' if i.due_date < today else 'Due') for i,p,balance,status in open_rows],
         dueToday=[dict(id=str(i.id),invoiceId=str(i.id),tenant=i.snapshot['tenantName'],room=i.snapshot.get('roomNumber') or '—',amount=float(balance),dueDate=str(i.due_date)) for i,p,balance,status in due_rows],
-        recentPayments=[dict(id=str(p.id),title=p.payment_number,detail=f"{p.snapshot['tenantName']} · ₹{p.amount}",time=str(p.payment_date)) for p in recent])
+        recentPayments=[dict(id=str(p.id),title=p.payment_number,detail=f"{p.snapshot['tenantName']} · ₹{p.amount}"
+            + (' · Razorpay Test Mode' if p.source == 'RAZORPAY_TEST' else ''),time=str(p.payment_date)) for p in recent])
 
 
 def tenant_summary(db, user, tenant_id):
@@ -79,6 +84,8 @@ def tenant_summary(db, user, tenant_id):
     monthly = s.invoice_query(user).where(Invoice.tenant_id == tenant.id, Invoice.cancelled.is_(False)).subquery()
     charges = db.scalar(select(func.coalesce(func.sum(monthly.c.total),0)).where(monthly.c.billing_period == business_today().strftime('%Y-%m')))
     return dict(tenantId=str(tenant.id),currentDue=totals['outstanding'],overdue=totals['overdue'],totalPaid=totals['collected'],
-        currentMonthCharges=float(charges),currentMonthPaid=totals['thisMonthCollected'],securityDeposit=tenant.data.get('securityDeposit') or 0,
+        currentMonthCharges=float(charges),currentMonthPaid=totals['thisMonthCollected'],
+        testPaid=totals['testCollected'],currentMonthTestPaid=totals['thisMonthTestCollected'],
+        securityDeposit=tenant.data.get('securityDeposit') or 0,
         nextDueDate=str(rows[0][0].due_date) if rows else None,recentPayments=[s.payment_output(p) for p in recent],
         openInvoices=[s.invoice_output(r[0],r[1],r[3]) for r in rows])
